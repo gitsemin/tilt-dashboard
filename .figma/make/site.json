@@ -1,0 +1,10 @@
+{
+  "description": "모니터링 대시보드에서 X·Y축 기울기 각도와 마지막 갱신 시각을 확인하고, 시간에 따른 센서값 변화를 실시간 그래프로 살펴보세요.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
