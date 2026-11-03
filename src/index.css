@@ -95,6 +95,12 @@
   font-weight: 600;
 }
 
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .connection__pulse {
   width: 7px;
   height: 7px;
@@ -102,6 +108,52 @@
   background: #13a68c;
   box-shadow: 0 0 0 4px rgb(19 166 140 / 12%);
   animation: pulse 2s ease-out infinite;
+}
+
+.connection--disconnected .connection__pulse,
+.connection--connecting .connection__pulse,
+.connection--disconnecting .connection__pulse,
+.connection--error .connection__pulse {
+  background: #a4adba;
+  box-shadow: none;
+  animation: none;
+}
+
+.connection--connecting .connection__pulse,
+.connection--disconnecting .connection__pulse {
+  background: #e6a23c;
+}
+
+.connection--error .connection__pulse {
+  background: #d65b5b;
+}
+
+.serial-button {
+  min-height: 38px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 10px;
+  background: #172238;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.serial-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #263a5b;
+}
+
+.serial-button:focus-visible {
+  outline: 3px solid rgb(47 107 255 / 35%);
+  outline-offset: 2px;
+}
+
+.serial-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .intro {
@@ -156,6 +208,17 @@
   height: 5px;
   border-radius: 50%;
   background: #13a68c;
+}
+
+.serial-message {
+  margin: -8px 2px 18px;
+  padding: 11px 14px;
+  border: 1px solid #f0d7b3;
+  border-radius: 10px;
+  background: #fffaf2;
+  color: #8b5c20;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .angle-grid {
@@ -364,6 +427,11 @@
   font-size: 9px;
 }
 
+.chart__empty {
+  fill: #a1aaba;
+  font-size: 13px;
+}
+
 .chart__line {
   fill: none;
   stroke-width: 2.3;
@@ -420,6 +488,22 @@
     padding-bottom: 18px;
   }
 
+  .topbar__actions {
+    gap: 7px;
+  }
+
+  .connection {
+    gap: 7px;
+    padding: 8px 10px;
+    font-size: 10px;
+  }
+
+  .serial-button {
+    min-height: 36px;
+    padding: 0 11px;
+    font-size: 11px;
+  }
+
   .intro {
     align-items: flex-start;
     flex-direction: column;
@@ -451,6 +535,19 @@
 
   .connection {
     padding-inline: 10px;
+  }
+
+  .topbar__actions {
+    gap: 5px;
+  }
+
+  .connection {
+    padding-inline: 8px;
+  }
+
+  .serial-button {
+    padding: 0 9px;
+    font-size: 10px;
   }
 
   .angle-card__value {
