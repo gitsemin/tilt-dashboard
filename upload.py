@@ -8,7 +8,7 @@ import serial
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
-BAUD_RATE = 9600
+BAUD_RATE = 115200
 TABLE_NAME = "readings"
 
 
@@ -47,8 +47,17 @@ def upload_lines(port_name: str, client: Client) -> None:
             if not raw_line:
                 continue
 
-            value = raw_line.decode("utf-8").strip()
-            if not value:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            # 스케치는 "STATE=RUN ... rotation_deg=0.2 rateZ=1.61 ..." 형식으로 보낸다.
+            # 부팅·보정 로그 같은 다른 줄은 건너뛴다.
+            if not line.startswith("STATE=RUN"):
+                continue
+
+            fields = dict(pair.split("=", 1) for pair in line.split() if "=" in pair)
+            try:
+                value = float(fields["rotation_deg"])
+            except (KeyError, ValueError):
+                logging.warning("형식이 다른 줄을 건너뜁니다: %s", line)
                 continue
 
             client.table(TABLE_NAME).insert({"value": value}).execute()

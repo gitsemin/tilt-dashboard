@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { SensorReading } from "./data/mockSensor"
+import { READINGS_TABLE, supabase, type ReadingRow } from "./lib/supabase"
 
 const CHART_WIDTH = 1000
 const CHART_HEIGHT = 300
@@ -34,7 +35,8 @@ function formatTime(date: Date, includeSeconds = false) {
 
 function angleToY(angle: number) {
   const plotHeight = CHART_HEIGHT - PADDING.top - PADDING.bottom
-  return PADDING.top + ((90 - angle) / 180) * plotHeight
+  const clamped = Math.max(-90, Math.min(90, angle))
+  return PADDING.top + ((90 - clamped) / 180) * plotHeight
 }
 
 function SensorIcon() {
@@ -261,6 +263,66 @@ export default function App() {
   const portRef = useRef<SerialPortConnection | null>(null)
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null)
   const intentionalDisconnectRef = useRef(false)
+  // 시리얼로 직접 받는 동안에는 Supabase 값으로 덮어쓰지 않는다.
+  const serialActiveRef = useRef(false)
+  const [supabaseLive, setSupabaseLive] = useState(false)
+
+  useEffect(() => {
+    const client = supabase
+    if (!client) return
+
+    // readings에는 회전 각도(value)만 있으므로, Y(회전 속도)는 이전 행과의 차이로 계산한다.
+    const toReading = (row: ReadingRow, previous?: SensorReading): SensorReading => {
+      const timestamp = new Date(row.created_at)
+      const x = Number(row.value ?? 0)
+      const seconds = previous
+        ? (timestamp.getTime() - previous.timestamp.getTime()) / 1000
+        : 0
+      const y = previous && seconds > 0 ? (x - previous.x) / seconds : 0
+      return { timestamp, x, y: Math.round(y * 100) / 100 }
+    }
+
+    let cancelled = false
+
+    void client
+      .from(READINGS_TABLE)
+      .select("id, created_at, value")
+      .order("id", { ascending: false })
+      .limit(HISTORY_LIMIT)
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error) {
+          setSerialMessage(`Supabase에서 값을 읽지 못했습니다: ${error.message}`)
+          return
+        }
+        if (serialActiveRef.current) return
+        const rows = [...(data ?? [])].reverse() as ReadingRow[]
+        const history: SensorReading[] = []
+        rows.forEach((row) => history.push(toReading(row, history[history.length - 1])))
+        setReadings(history)
+      })
+
+    const channel = client
+      .channel("readings-live")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: READINGS_TABLE },
+        (payload) => {
+          if (serialActiveRef.current) return
+          const row = payload.new as ReadingRow
+          setReadings((current) => [
+            ...current.slice(-(HISTORY_LIMIT - 1)),
+            toReading(row, current[current.length - 1]),
+          ])
+        },
+      )
+      .subscribe((status) => setSupabaseLive(status === "SUBSCRIBED"))
+
+    return () => {
+      cancelled = true
+      void client.removeChannel(channel)
+    }
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -287,20 +349,23 @@ export default function App() {
       const trimmedLine = line.trim()
       if (!trimmedLine) return
 
-      const values = trimmedLine.split(/[,\s]+/).map(Number)
-      if (
-        values.length !== 2 ||
-        values.some(
-          (value) => !Number.isFinite(value) || value < -90 || value > 90,
-        )
-      ) {
-        setSerialMessage(
-          `데이터 형식 오류: "${trimmedLine}" — 한 줄에 -90~90도 범위의 X,Y 각도 두 개를 보내세요.`,
-        )
+      // 아두이노 스케치는 "STATE=RUN ... rotation_deg=0.2 rateZ=1.61 ..." 형식으로 보낸다.
+      // 부팅·보정 로그 같은 다른 줄은 조용히 건너뛴다.
+      if (!trimmedLine.startsWith("STATE=RUN")) return
+
+      const fields = Object.fromEntries(
+        trimmedLine
+          .split(/\s+/)
+          .map((pair) => pair.split("="))
+          .filter((pair) => pair.length === 2),
+      )
+      const x = Number(fields.rotation_deg)
+      const y = Number(fields.rateZ)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        setSerialMessage(`데이터 형식 오류: "${trimmedLine}"`)
         return
       }
 
-      const [x, y] = values
       const reading: SensorReading = { timestamp: new Date(), x, y }
       setReadings((current) => [...current.slice(-(HISTORY_LIMIT - 1)), reading])
       setSerialMessage("")
@@ -328,6 +393,7 @@ export default function App() {
     } catch (error) {
       readError = error
     } finally {
+      serialActiveRef.current = false
       reader.releaseLock()
       if (readerRef.current === reader) readerRef.current = null
 
@@ -374,7 +440,7 @@ export default function App() {
     let opened = false
     try {
       selectedPort = await serial.requestPort()
-      await selectedPort.open({ baudRate: 9600 })
+      await selectedPort.open({ baudRate: 115200 })
       opened = true
       const readable = selectedPort.readable
       if (!readable) throw new Error("선택한 포트에서 데이터를 읽을 수 없습니다.")
@@ -383,6 +449,7 @@ export default function App() {
       portRef.current = selectedPort
       readerRef.current = reader
       intentionalDisconnectRef.current = false
+      serialActiveRef.current = true
       setReadings([])
       setConnectionStatus("connected")
       void consumeSerialData(reader, selectedPort)
@@ -455,10 +522,17 @@ export default function App() {
           </div>
 
           <div className="topbar__actions">
-            <div className={`connection connection--${connectionStatus}`}>
-              <span className="connection__pulse" />
-              <span>{connectionLabel[connectionStatus]}</span>
-            </div>
+            {connectionStatus === "disconnected" && supabaseLive ? (
+              <div className="connection connection--connected">
+                <span className="connection__pulse" />
+                <span>Supabase 실시간</span>
+              </div>
+            ) : (
+              <div className={`connection connection--${connectionStatus}`}>
+                <span className="connection__pulse" />
+                <span>{connectionLabel[connectionStatus]}</span>
+              </div>
+            )}
             <button
               className="serial-button"
               type="button"
@@ -505,13 +579,13 @@ export default function App() {
             axis="X"
             angle={latest?.x ?? null}
             accent="#2F6BFF"
-            description="좌우 기울기"
+            description="회전 각도 (rotation_deg)"
           />
           <AngleCard
             axis="Y"
             angle={latest?.y ?? null}
             accent="#13A68C"
-            description="앞뒤 기울기"
+            description="회전 속도 °/s (rateZ)"
           />
         </section>
 
@@ -520,7 +594,7 @@ export default function App() {
             <div>
               <p className="eyebrow">실시간 변화</p>
               <h2>기울기 추이</h2>
-              <p>최근 {HISTORY_LIMIT}개 수신값 · 데이터는 저장되지 않습니다</p>
+              <p>최근 {HISTORY_LIMIT}개 수신값 · Supabase readings 실시간</p>
             </div>
             <div className="legend" aria-label="그래프 범례">
               <span>
@@ -540,7 +614,7 @@ export default function App() {
             <i />
             <strong>+90°</strong>
             <span className="chart-card__foot-note">
-              9600 baud · 줄마다 X,Y 값 (예: 12.4,-6.8)
+              115200 baud 시리얼 또는 Supabase readings
             </span>
           </div>
         </section>
